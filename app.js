@@ -8,6 +8,7 @@ const Slack = require('slack-notify');
 
 const StateRegExp = process.env.STATE_REGEXPR || '^(die|start)$';
 const NameRegexp = process.env.NAME_REGEXPR || '.*';
+const SlackChannel = process.env.SLACK_CHANNEL || '#devops';
 const SlackWebhookUrl = process.env.SLACK_WEBHOOK_URL;
 const AwsRegion = process.env.AWS_REGION || 'UNKOWN';
 const EC2Hostname = process.env.DOCKER_HOSTNAME || 'UNKOWN';
@@ -103,7 +104,7 @@ class EventNotifier {
     return this._slack.sendAsync({
       username: `[${EC2Hostname}] docker${event.container.Name} container ${status.toUpperCase()}`,
       icon_emoji: eventInfo.emoji,
-      channel: '',
+      channel: SlackChannel,
       text: '',
       fields: {
         'Timestamp': new Date().toISOString(),
