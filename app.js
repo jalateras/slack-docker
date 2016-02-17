@@ -71,6 +71,11 @@ class EventInspector {
         .then((container) => {
           event.container = this._containers[event.id] = container;
           callback(null, event);
+        }).catch((e) => {
+          event.container = {
+            Name: '/UNKOWN'
+          };
+          callback(null, event);
         });
       }
       if (event.status == 'destroy') {
@@ -105,6 +110,7 @@ class EventNotifier {
         'Region': AwsRegion.toUpperCase(),
         'Container': `docker${event.container.Name}`,
         'Image': event.from
+
       }
     });
   }
