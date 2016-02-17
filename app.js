@@ -1,18 +1,52 @@
 "use strict";
 
-const Promise     = require('bluebird');
+const Promise = require('bluebird');
 const JSONStream  = require('JSONStream');
 const EventStream = require('event-stream');
-const Dockerode   = require('dockerode');
-const Slack       = require('slack-notify');
+const Dockerode = require('dockerode');
+const Slack = require('slack-notify');
 
-class EventFilter {
-  constructor(image) {
-    this._imageRegExp = new RegExp(image);
+const StateRegExp = process.env.STATE_REGEXPR || '^(die|start)$';
+const NameRegexp = process.env.NAME_REGEXPR || '.*';
+const SlackWebhookUrl = process.env.SLACK_WEBHOOK_URL;
+const AwsRegion = process.env.AWS_REGION || 'UNKOWN';
+const EC2Hostname = process.env.DOCKER_HOSTNAME || 'UNKOWN';
+
+const EventInfo = {
+  die: {
+    pastTense: 'died',
+    emoji: ':warning:',
+    color: '#FF0000'
+  },
+  start: {
+    pastTense: 'started',
+    emoji: ':trophy:',
+    color: '#00FF000'
+  }
+};
+
+class EventStateFilter {
+  constructor(regexp) {
+    this._regexp = new RegExp(regexp);
   }
   filter() {
     return EventStream.map((event, callback) => {
-      if (this._imageRegExp.test(event.from)) {
+      if (this._regexp.test(event.status)) {
+        callback(null, event);
+      } else {
+        callback();
+      }
+    });
+  }
+}
+
+class EventContainerNameFilter {
+  constructor(regexp) {
+    this._regexp = new RegExp(regexp);
+  }
+  filter() {
+    return EventStream.map((event, callback) => {
+      if (this._regexp.test(event.container.Name)) {
         callback(null, event);
       } else {
         callback();
@@ -45,56 +79,47 @@ class EventInspector {
     });
   }
 }
-
 class EventNotifier {
   constructor(slack) {
     this._slack = slack;
   }
-  _send(event, text, fields) {
-    return this._slack.sendAsync({
-      username: `docker${event.container.Name}`,
-      icon_emoji: ':whale:',
-      channel: '',
-      text: text,
-      fields: fields
-    });
-  }
-  _map_start(e) {
-		return this._send(e, `Started ${e.container.Config.Hostname}`, {
-      'Image': e.from,
-      'IP Address': e.container.NetworkSettings.IPAddress,
-      'Path': e.container.Path,
-      'Arguments': e.container.Args,
-      'Started at': e.container.State.StartedAt
-    });
-  }
-  _map_kill(e) {
-		return this._send(e, `Stopped ${e.container.Config.Hostname}`);
-	}
-  _map_die(e) {
-		return this._send(e, `Stopped ${e.container.Config.Hostname}`);
-	}
-  _map_destroy(e) {
-		return this._send(e, `Removed ${e.container.Config.Hostname}`);
-	}
-  map() {
+
+  map(event, callback) {
     return EventStream.map((event, callback) => {
-      if (this[`_map_${event.status}`]) {
-        this[`_map_${event.status}`](event).then((sent) => callback(null, sent));
+      this.sendNotification(event)
+        .then((sent) => callback(null, sent));
+    });
+  }
+
+  sendNotification(event) {
+    var eventInfo = EventInfo[event.status] || {};
+    var status =  eventInfo.pastTense || event.status;
+
+    return this._slack.sendAsync({
+      username: `[${EC2Hostname}] docker${event.container.Name} container ${status.toUpperCase()}`,
+      icon_emoji: eventInfo.emoji,
+      channel: '',
+      text: '',
+      fields: {
+        'Timestamp': new Date().toISOString(),
+        'Region': AwsRegion.toUpperCase(),
+        'Container': `docker${event.container.Name}`,
+        'Image': event.from
       }
     });
   }
 }
 
 const docker = Promise.promisifyAll(new Dockerode());
-const slack  = Promise.promisifyAll(Slack(process.env.webhook));
+const slack  = Promise.promisifyAll(Slack(SlackWebhookUrl));
 
 docker.versionAsync()
 .then((version) => console.info(version))
 .then(() => docker.getEventsAsync())
 .then((stream) => stream
   .pipe(JSONStream.parse())
-  .pipe(new EventFilter(process.env.image_regexp).filter())
+  .pipe(new EventStateFilter(StateRegExp).filter())
   .pipe(new EventInspector(docker).map())
+  .pipe(new EventContainerNameFilter(NameRegexp).filter())
   .pipe(new EventNotifier(slack).map())
 ).catch((e) => console.error(e));

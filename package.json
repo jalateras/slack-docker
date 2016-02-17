@@ -18,5 +18,8 @@
     "dockerode": "^2.2.3",
     "event-stream": "^3.3.2",
     "slack-notify": "^0.1.5"
+  },
+  "devDependencies": {
+    "eslint": "^2.1.0"
   }
 }
