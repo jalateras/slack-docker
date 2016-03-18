@@ -1,28 +1,42 @@
-"use strict";
+'use strict';
 
+const https = require('https');
+const querystring = require('querystring');
+const url = require('url');
 const Promise = require('bluebird');
 const JSONStream  = require('JSONStream');
 const EventStream = require('event-stream');
 const Dockerode = require('dockerode');
 const Slack = require('slack-notify');
 
-const StateRegExp = process.env.STATE_REGEXPR || '^(die|start)$';
+const StateRegExp = process.env.STATE_REGEXPR || '^(die|start|restart|stop)$';
 const NameRegexp = process.env.NAME_REGEXPR || '.*';
 const SlackChannel = process.env.SLACK_CHANNEL || '#devops';
 const SlackWebhookUrl = process.env.SLACK_WEBHOOK_URL;
 const AwsRegion = process.env.AWS_REGION || 'UNKOWN';
 const EC2Hostname = process.env.DOCKER_HOSTNAME || 'UNKOWN';
+const EventHysteresis = process.env.EVENT_HYSTERESIS || 5 * 1000;
 
 const EventInfo = {
-  die: {
-    pastTense: 'died',
-    emoji: ':warning:',
-    color: '#FF0000'
-  },
   start: {
     pastTense: 'started',
-    emoji: ':trophy:',
-    color: '#00FF000'
+    emoji: ':white_check_mark:',
+    color: '#00FF00'
+  },
+  stop: {
+    pastTense: 'stopped',
+    emoji: ':negative_squared_cross_mark:',
+    color: '#FF0000'
+  },
+  restart: {
+    pastTense: 'restarted',
+    emoji: ':recycle:',
+    color: '#00FF00'
+  },
+  die: {
+    pastTense: 'died',
+    emoji: ':x:',
+    color: '#FF0000'
   }
 };
 
@@ -88,32 +102,82 @@ class EventInspector {
 class EventNotifier {
   constructor(slack) {
     this._slack = slack;
+    this._notifications = {};
   }
 
   map(event, callback) {
     return EventStream.map((event, callback) => {
-      this.sendNotification(event)
-        .then((sent) => callback(null, sent));
+      var notification = this._notifications[event.id];
+      if (!notification)  {
+        notification = this._notifications[event.id] = {
+          event: event
+        };
+      }
+
+      if (parseInt(event.timeNano) >= parseInt(notification.event.timeNano)) {
+        notification.event = event;
+        if (notification.fn) {
+          clearTimeout(notification.fn);
+        }
+
+        notification.fn = setTimeout(() => {
+          this.sendNotification(event);
+          delete this._notifications[event.id];
+        }, EventHysteresis);
+      }
+
+      callback();
     });
   }
 
   sendNotification(event) {
     var eventInfo = EventInfo[event.status] || {};
     var status =  eventInfo.pastTense || event.status;
-
-    return this._slack.sendAsync({
-      username: `[${EC2Hostname}] docker${event.container.Name} container ${status.toUpperCase()}`,
-      icon_emoji: eventInfo.emoji,
+    var slackNotification = JSON.stringify({
       channel: SlackChannel,
-      text: '',
-      fields: {
-        'Timestamp': new Date().toISOString(),
-        'Region': AwsRegion.toUpperCase(),
-        'Container': `docker${event.container.Name}`,
-        'Image': event.from
-
-      }
+      icon_emoji: eventInfo.emoji,
+      username:  `${EC2Hostname}${event.container.Name} ${status}`,
+      attachments: [
+        {
+          fallback: `${EC2Hostname}${event.container.Name} ${status}`,
+          color: eventInfo.color,
+          text: '',
+          fields: [
+            {
+              title: 'Timestamp',
+              value: new Date().toISOString(),
+              short: true
+            },
+            {
+              title: 'Region',
+              value: AwsRegion,
+              short: true
+            },
+            {
+              title: 'Image',
+              value: event.from,
+              short: true
+            }
+          ]
+        }
+      ]
     });
+    var postData = querystring.stringify({
+      payload: slackNotification
+    });
+    var options = url.parse(SlackWebhookUrl);
+    options.method = 'POST';
+    options.headers = {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Content-Length': postData.length
+    };
+
+    var req = https.request(options)
+      .on('error', function(e) {
+        console.error('error', e);
+      });
+    req.write(postData);
+    req.end();
   }
 }
 
