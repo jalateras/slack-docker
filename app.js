@@ -7,7 +7,6 @@ const Promise = require('bluebird');
 const JSONStream  = require('JSONStream');
 const EventStream = require('event-stream');
 const Dockerode = require('dockerode');
-const Slack = require('slack-notify');
 
 const StateRegExp = process.env.STATE_REGEXPR || '^(die|start|restart|stop)$';
 const NameRegexp = process.env.NAME_REGEXPR || '.*';
@@ -100,8 +99,7 @@ class EventInspector {
   }
 }
 class EventNotifier {
-  constructor(slack) {
-    this._slack = slack;
+  constructor() {
     this._notifications = {};
   }
 
@@ -182,7 +180,6 @@ class EventNotifier {
 }
 
 const docker = Promise.promisifyAll(new Dockerode());
-const slack  = Promise.promisifyAll(Slack(SlackWebhookUrl));
 
 docker.versionAsync()
 .then((version) => console.info(version))
@@ -192,5 +189,5 @@ docker.versionAsync()
   .pipe(new EventStateFilter(StateRegExp).filter())
   .pipe(new EventInspector(docker).map())
   .pipe(new EventContainerNameFilter(NameRegexp).filter())
-  .pipe(new EventNotifier(slack).map())
+  .pipe(new EventNotifier().map())
 ).catch((e) => console.error(e));
