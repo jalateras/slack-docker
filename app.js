@@ -112,7 +112,7 @@ class EventNotifier {
         };
       }
 
-      if (parseInt(event.timeNano) >= parseInt(notification.event.timeNano)) {
+      if (parseInt(event.time) >= parseInt(notification.event.time)) {
         notification.event = event;
         if (notification.fn) {
           clearTimeout(notification.fn);
